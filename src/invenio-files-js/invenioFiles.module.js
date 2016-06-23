@@ -35,25 +35,49 @@
 
     // Assign the controller to vm
     var vm = this;
+
+    // Parameters
+
+    // Initialize the endpoints
+    vm.invenioFilesEndpoints = {};
+
+    // Initialize module $http request args
+    vm.invenioFilesArgs = {
+      data: {
+        file: [],
+      }
+    };
+
     // Initialize the model
     var Uploader = new InvenioFilesUploaderModel();
 
-    // Functions
-
-    function requestBucketID() {
+    /**
+     * Request an upload
+     * @memberof invenioFilesController
+     * @function upload
+     */
+    function getEndpoints(){
       var deferred = $q.defer();
-      if (vm.invenioFilesInitialization !== undefined && vm.invenioFilesArgs.bucket_id === null) {
+      if (vm.invenioFilesEndpoints.bucket === undefined) {
+        // If the action url doesnt exists request it
         invenioFilesAPI.request({
-          url: vm.invenioFilesInitialization,
-          method: 'POST'
-        }).then(function(response) {
-          $rootScope.$broadcast('invenio.deposit.init', response);
-          deferred.resolve();
-        }, function(response) {
-          deferred.rejected();
+          method: 'POST',
+          url: vm.invenioFilesEndpoints.initialization,
+          data: {},
+          headers: vm.invenioFilesArgs.headers || {}
+        }).then(function success(response) {
+          // Upadate the endpoints
+          $rootScope.$broadcast(
+            'invenio.records.endpoints.updated', response.data.links
+          );
+          deferred.resolve({});
+        }, function error(response) {
+          // Error
+          deferred.reject(response);
         });
       } else {
-        deferred.resolve();
+        // We already have it resolve it asap
+        deferred.resolve({});
       }
       return deferred.promise;
     }
@@ -64,7 +88,7 @@
      * @function upload
      */
     function upload() {
-      requestBucketID().then(function() {
+      getEndpoints().then(function() {
         // Get next file to upload
         Uploader.setArgs(vm.invenioFilesArgs);
         // Get the available states
@@ -86,25 +110,35 @@
      * @memberof invenioFilesController
      * @function invenioUploaderInitialization
      */
-    function invenioUploaderInitialization(evt, params) {
+    function invenioUploaderInitialization(evt, params, endpoints) {
       // Do initialization
       vm.invenioFilesArgs = angular.merge(
         {},
         vm.invenioFilesArgs,
         params
       );
+      // Add the entpoints
+      vm.invenioFilesEndpoints = angular.merge(
+        {},
+        vm.invenioFilesEndpoints,
+        endpoints
+      );
     }
 
     /**
-     * Get bucket id from deposit
-     * @memberof invenioFilesController
-     * @function invenioUploaderInitialization
-     */
-    function invenioDepositInit(evt, data) {
-      // Set the bucket_id if not already set!
-      if (vm.invenioFilesArgs.bucket_id === null) {
-        vm.invenioFilesArgs.bucket_id = data.bucket_id;
-      }
+      * Updating the endpoints
+      * @memberof invenioFilesController
+      * @function invenioRecordsEndpointsUpdated
+      * @param {Object} evt - The event object.
+      * @param {Object} endpoints - The object with the endpoints.
+      */
+    function invenioFilesEndpointsUpdated(evt, endpoints) {
+      vm.invenioFilesEndpoints = angular.merge(
+        {},
+        vm.invenioFilesEndpoints,
+        endpoints
+      );
+      // FIXME: REMEMBER TO PASS THE URL TO 'invenioFilesArgs'
     }
 
     /**
@@ -128,6 +162,7 @@
         // Prepare parameters
         var args = angular.copy(vm.invenioFilesArgs);
         args.method = 'DELETE';
+        // FIXME: bucket
         args.url = args.url + '/' + args.bucket_id + '/' + file.name;
         invenioFilesAPI.request(args).then(function(response) {
           // Just remove it from the list
@@ -316,15 +351,6 @@
 
     ////////////
 
-    // Parameters
-
-    // Initialize module $http request args
-    vm.invenioFilesArgs = {
-      data: {
-        file: [],
-      }
-    };
-
     // Add file to the list
     vm.addFiles = addFiles;
     // Cancel uploading files
@@ -380,7 +406,9 @@
     );
 
     // When the bucket_id is empty we should retrieve it from events
-    $rootScope.$on('invenio.deposit.init', invenioDepositInit);
+    $rootScope.$on(
+      'invenio.records.endpoints.updated', invenioFilesEndpointsUpdated
+    );
 
     ////////////
   }
@@ -403,10 +431,9 @@
    * @example
    *    Usage:
    *     <invenio-files-uploader
-   *       bucket-id="4077fbb5-fd4f-47ac-8b29-cbcc73370594"
    *       method="PUT"
-   *       upload-endpoint="http://localhost:5000/files"
-   *       upload-extra-params='{"resumeChunkSize": 900000}'
+   *       endpoint="http://localhost:5000/files"
+   *       extra-params='{"resumeChunkSize": 900000}'
    *     >
    *     </invenio-files-uploader>
    */
@@ -424,24 +451,20 @@
      */
     function link(scope, element, attrs, vm) {
       // Set the initialization
-      vm.invenioFilesInitialization = attrs.initialization || undefined;
-      // Update the parameters
-      var collectedArgs = {
-        url: attrs.uploadEndpoint,
-        method: attrs.uploadMethod || 'PUT',
-        bucket_id: attrs.bucketId || null,
+      var initialization = attrs.initialization || undefined;
+      // Get the endpoints for schemas
+      var endpoints = {
+        action: attrs.action || null,
+        initialization: attrs.initialization || null,
       };
 
-      var extraParams = JSON.parse(attrs.uploadExtraParams || '{}');
-      // Update arguments
-      var params = angular.merge(
-        {},
-        collectedArgs,
-        extraParams
-      );
+      var params = JSON.parse(attrs.extraParams || '{}');
 
       // Brodcast ready to initialization
-      scope.$broadcast('invenio.uploader.initialazation', params);
+      scope.$broadcast('invenio.uploader.initialazation',
+        params,
+        endpoints
+      );
     }
 
     ////////////
@@ -820,9 +843,7 @@
       var deferred = $q.defer();
       var args = that._prepareRequest(file.name);
       args.data.file = file;
-      args.headers = {
-        'Uploader-File-Size': file.size
-      };
+      args.headers['Uploader-File-Size'] = file.size;
       this._requestUploadID(args).then(function(response) {
         var _file = response.config.data.file;
         var params = that._prepareRequest(_file.name);
@@ -856,6 +877,7 @@
 
     Uploader.prototype._prepareRequest = function(name) {
       var args = angular.copy(this.args);
+      // FIXME: args
       args.url = args.url + '/' + args.bucket_id + '/' + name;
       return args;
     };
